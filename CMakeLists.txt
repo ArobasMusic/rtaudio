@@ -1,126 +1,100 @@
-cmake_minimum_required(VERSION 2.8.10)
-project(RtAudio)
+cmake_minimum_required(VERSION 3.0.0)
+cmake_policy(SET CMP0042 OLD)
 
-include(CTest)
+project(RtAudio VERSION 4.1.2)
+
 include(CheckFunctionExists)
-
-option(BUILD_PYTHON "Build PyRtAudio python bindings" OFF)
-option(AUDIO_WINDOWS_DS "Build Windows DirectSound API" OFF)
-option(AUDIO_WINDOWS_ASIO "Build Windows ASIO API" OFF)
-option(AUDIO_WINDOWS_WASAPI "Build Windows WASAPI API" OFF)
-option(AUDIO_LINUX_OSS "Build Linux OSS API" OFF)
-option(AUDIO_LINUX_ALSA "Build Linux ALSA API" OFF)
-option(AUDIO_LINUX_PULSE "Build Linux PulseAudio API" OFF)
-option(AUDIO_UNIX_JACK "Build Unix JACK audio server API" OFF)
-option(AUDIO_OSX_CORE "Build Mac OSX CoreAudio API" OFF)
-
-if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_definitions(-D__RTAUDIO_DEBUG__)
-endif ()
 
 check_function_exists(gettimeofday HAVE_GETTIMEOFDAY)
 
-if (HAVE_GETTIMEOFDAY)
-    add_definitions(-DHAVE_GETTIMEOFDAY)
-endif ()
+set(DEFINITIONS)
+set(DIRECTORIES)
+set(LIBRARIES)
+set(OPTIONS)
+set(HEADERS RtAudio.h)
+set(SOURCES RtAudio.cpp ${HEADERS})
 
-if (CMAKE_COMPILER_IS_GNUCXX)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
-endif (CMAKE_COMPILER_IS_GNUCXX)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  list(APPEND DEFINITIONS __RTAUDIO_DEBUG__)
+endif()
 
-set(rtaudio_SOURCES RtAudio.cpp)
+if(HAVE_GETTIMEOFDAY)
+  list(APPEND DEFINITIONS HAVE_GETTIMEOFDAY)
+endif()
 
-set(LINKLIBS)
-if (CMAKE_SYSTEM_NAME MATCHES "kNetBSD.*|NetBSD.*")
-    message(STATUS "NetBSD detected, using OSS")
-    find_package(Threads REQUIRED CMAKE_THREAD_PREFER_PTHREAD)
-    list(APPEND LINKLIBS ossaudio ${CMAKE_THREAD_LIBS_INIT})
-    set(AUDIO_LINUX_OSS ON)
-elseif (UNIX AND NOT APPLE)
-    if (NOT AUDIO_LINUX_PULSE AND NOT AUDIO_LINUX_ALSA AND NOT AUDIO_LINUX_OSS AND NOT AUDIO_UNIX_JACK)
-        set(AUDIO_LINUX_ALSA ON)
-    endif()
+if(APPLE)
+  find_library(COREAUDIO_LIB CoreAudio)
+  find_library(COREFOUNDATION_LIB CoreFoundation)
+  list(APPEND DEFINITIONS __MACOSX_CORE__)
+  list(APPEND LIBRARIES ${COREAUDIO_LIB} ${COREFOUNDATION_LIB})
+endif()
 
-    if (AUDIO_LINUX_PULSE)
-        find_library(PULSE_LIB pulse)
-        find_library(PULSESIMPLE_LIB pulse-simple)
-        list(APPEND LINKLIBS ${PULSE_LIB} ${PULSESIMPLE_LIB})
-        add_definitions(-D__LINUX_PULSE__)
-        message(STATUS "Using Linux PulseAudio")
-    endif (AUDIO_LINUX_PULSE)
-    if (AUDIO_LINUX_ALSA)
-        find_package(ALSA)
-        find_package(Threads REQUIRED CMAKE_THREAD_PREFER_PTHREAD)
-        if (NOT ALSA_FOUND)
-            message(FATAL_ERROR "ALSA API requested but no ALSA dev libraries found")
-        endif()
-        include_directories(${ALSA_INCLUDE_DIR})
-        list(APPEND LINKLIBS ${ALSA_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
-        add_definitions(-D__LINUX_ALSA__)
-        message(STATUS "Using Linux ALSA")
-    endif (AUDIO_LINUX_ALSA)
-endif ()
+if(WIN32)
+  list(APPEND DEFINITIONS __WINDOWS_DS__ __WINDOWS_WASAPI__ __WINDOWS_ASIO__)
+  list(APPEND DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  list(APPEND LIBRARIES dsound ksuser ole32 uuid winmm)
+  list(APPEND ASIO_HEADERS
+    include/asio.h
+    include/asiodrivers.h
+    include/asiodrvr.h
+    include/asiolist.h
+    include/asiosys.h
+    include/ginclude.h
+    include/iasiodrv.h
+    include/iasiothiscallresolver.h
+  )
+  list(APPEND ASIO_SOURCES
+    include/asio.cpp
+    include/asiodrivers.cpp
+    include/asiolist.cpp
+    include/iasiothiscallresolver.cpp
+  )
+  list(APPEND SOURCES
+    ${ASIO_SOURCES}
+    ${ASIO_HEADERS}
+  )
+endif()
 
-if (APPLE)
-    if (NOT AUDIO_OSX_CORE AND NOT AUDIO_UNIX_JACK)
-        set(AUDIO_OSX_CORE ON)
-    endif()
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  list(APPEND OPTIONS -Wall)
+endif()
 
-    if (AUDIO_OSX_CORE)
-        find_library(COREAUDIO_LIB CoreAudio)
-        find_library(COREFOUNDATION_LIB CoreFoundation)
-        list(APPEND LINKLIBS ${COREAUDIO_LIB} ${COREFOUNDATION_LIB})
-        add_definitions(-D__MACOSX_CORE__)
-        message(STATUS "Using OSX CoreAudio")
-    endif (AUDIO_OSX_CORE)
-endif (APPLE)
+add_library(rtaudio_objlib OBJECT ${SOURCES})
 
-# JACK supported on many Unices
-if (UNIX)
-    if (AUDIO_UNIX_JACK)
-        find_library(JACK_LIB jack)
-        list(APPEND LINKLIBS ${JACK_LIB})
-        add_definitions(-D__UNIX_JACK__)
-        message(STATUS "Using JACK")
-    endif (AUDIO_UNIX_JACK)
-endif (UNIX)
+set_target_properties(
+  rtaudio_objlib
+  PROPERTIES
+    CXX_STANDARD 11
+    COMPILE_DEFINITIONS "${DEFINITIONS}"
+    COMPILE_OPTIONS "${OPTIONS}"
+    INCLUDE_DIRECTORIES "${DIRECTORIES}"
+)
 
-if (WIN32)
-    if (NOT AUDIO_WINDOWS_DS AND NOT AUDIO_WINDOWS_ASIO AND NOT AUDIO_WINDOWS_WASAPI)
-        set(AUDIO_WINDOWS_WASAPI ON)
-    endif()
+add_library(rtaudio SHARED $<TARGET_OBJECTS:rtaudio_objlib>)
+target_link_libraries(rtaudio PUBLIC ${LIBRARIES})
+set_target_properties(rtaudio PROPERTIES DEBUG_POSTFIX "_d")
 
-    include_directories(include)
-    list(APPEND LINKLIBS winmm ole32)
+add_library(rtaudio_static STATIC $<TARGET_OBJECTS:rtaudio_objlib>)
+target_link_libraries(rtaudio_static PUBLIC ${LIBRARIES})
+set_target_properties(rtaudio_static PROPERTIES DEBUG_POSTFIX "_d")
 
-    if (AUDIO_WINDOWS_DS)
-        add_definitions(-D__WINDOWS_DS__)
-        message(STATUS "Using Windows DirectSound")
-        list(APPEND LINKLIBS dsound)
-    endif (AUDIO_WINDOWS_DS)
-    if (AUDIO_WINDOWS_WASAPI)
-        add_definitions(-D__WINDOWS_WASAPI__)
-        message(STATUS "Using Windows WASAPI")
-        list(APPEND LINKLIBS uuid ksuser)
-    endif (AUDIO_WINDOWS_WASAPI)
-    if (AUDIO_WINDOWS_ASIO)
-        list(APPEND rtaudio_SOURCES
-            include/asio.cpp
-            include/asiodrivers.cpp
-            include/asiolist.cpp
-            include/iasiothiscallresolver.cpp)
-        add_definitions(-D__WINDOWS_ASIO__)
-        message(STATUS "Using Windows ASIO")
-    endif (AUDIO_WINDOWS_ASIO)
-endif (WIN32)
+install(
+  TARGETS rtaudio rtaudio_static
+  PUBLIC_HEADER DESTINATION ${INCLUDE_INSTALL_DIR}
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+)
 
-cmake_policy(SET CMP0042 OLD)
-add_library(rtaudio SHARED ${rtaudio_SOURCES})
-add_library(rtaudio_static STATIC ${rtaudio_SOURCES})
+install(FILES ${HEADERS} DESTINATION include)
+if(WIN32)
+  install(FILES ${ASIO_HEADERS} DESTINATION include/asio)
+endif()
 
-target_link_libraries(rtaudio ${LINKLIBS})
-
-if (BUILD_TESTING)
-    add_subdirectory(tests)
-endif (BUILD_TESTING)
-
+if(EXISTS ${RTAUDIO_FIND_TEMPLATE_FILE})
+  configure_file(
+    "${RTAUDIO_FIND_TEMPLATE_FILE}"
+    "${CMAKE_CURRENT_BINARY_DIR}/FindRtAudio.cmake"
+    @ONLY
+  )
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/FindRtAudio.cmake" DESTINATION cmake)
+endif()

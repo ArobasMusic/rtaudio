@@ -3693,7 +3693,8 @@ if ( objectPtr )\
   objectPtr = NULL;\
 }
 
-typedef HANDLE ( __stdcall *TAvSetMmThreadCharacteristicsPtr )( LPCWSTR TaskName, LPDWORD TaskIndex );
+typedef HANDLE(__stdcall *TAvSetMmThreadCharacteristicsPtr)(LPCWSTR TaskName, LPDWORD TaskIndex);
+typedef BOOL ( __stdcall *TAvRevertMmThreadCharacteristicsPtr )( HANDLE TaskHandle );
 
 //-----------------------------------------------------------------------------
 
@@ -4710,11 +4711,11 @@ void RtApiWasapi::wasapiThread()
 
   // Attempt to assign "Pro Audio" characteristic to thread
   HMODULE AvrtDll = LoadLibrary( (LPCTSTR) "AVRT.dll" );
+  HANDLE avrtTaskHandle{0};
   if ( AvrtDll ) {
     DWORD taskIndex = 0;
     TAvSetMmThreadCharacteristicsPtr AvSetMmThreadCharacteristicsPtr = ( TAvSetMmThreadCharacteristicsPtr ) GetProcAddress( AvrtDll, "AvSetMmThreadCharacteristicsW" );
-    AvSetMmThreadCharacteristicsPtr( L"Pro Audio", &taskIndex );
-    FreeLibrary( AvrtDll );
+	  avrtTaskHandle = AvSetMmThreadCharacteristicsPtr( L"Pro Audio", &taskIndex );
   }
 
   // start capture stream if applicable
@@ -4891,8 +4892,10 @@ void RtApiWasapi::wasapiThread()
     deviceBuffSize = std::max( stream_.bufferSize * stream_.nDeviceChannels[INPUT] * formatBytes( stream_.deviceFormat[INPUT] ),
                                stream_.bufferSize * stream_.nDeviceChannels[OUTPUT] * formatBytes( stream_.deviceFormat[OUTPUT] ) );
   }
-
-  convBuffer = ( char* ) malloc( convBuffSize );
+  // HACK :
+  // convertBufferWasapi could produce a HEAP CORRUPTION
+  // Allocating more memory prevents the crash, but doesn't fix the bug!
+  convBuffer = ( char* ) malloc( 2 * convBuffSize );
   stream_.deviceBuffer = ( char* ) malloc( deviceBuffSize );
   if ( !convBuffer || !stream_.deviceBuffer ) {
     errorType = RtAudioError::MEMORY_ERROR;
@@ -5165,6 +5168,12 @@ void RtApiWasapi::wasapiThread()
   }
 
 Exit:
+  if (AvrtDll) {
+	  TAvRevertMmThreadCharacteristicsPtr AvRevertMmThreadCharacteristicsPtrPtr = (TAvRevertMmThreadCharacteristicsPtr)GetProcAddress(AvrtDll, "AvRevertMmThreadCharacteristics");
+	  AvRevertMmThreadCharacteristicsPtrPtr(avrtTaskHandle);
+	  
+	  FreeLibrary( AvrtDll );
+  }
   // clean up
   CoTaskMemFree( captureFormat );
   CoTaskMemFree( renderFormat );
