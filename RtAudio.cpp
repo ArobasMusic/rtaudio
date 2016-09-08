@@ -46,6 +46,7 @@
 #include <cstring>
 #include <climits>
 #include <algorithm>
+#include <cassert>
 
 // Static variable definitions.
 const unsigned int RtApi::MAX_SAMPLE_RATES = 14;
@@ -3693,7 +3694,8 @@ if ( objectPtr )\
   objectPtr = NULL;\
 }
 
-typedef HANDLE ( __stdcall *TAvSetMmThreadCharacteristicsPtr )( LPCWSTR TaskName, LPDWORD TaskIndex );
+typedef HANDLE(__stdcall *TAvSetMmThreadCharacteristicsPtr)(LPCWSTR TaskName, LPDWORD TaskIndex);
+typedef BOOL ( __stdcall *TAvRevertMmThreadCharacteristicsPtr )( HANDLE TaskHandle );
 
 //-----------------------------------------------------------------------------
 
@@ -4710,11 +4712,12 @@ void RtApiWasapi::wasapiThread()
 
   // Attempt to assign "Pro Audio" characteristic to thread
   HMODULE AvrtDll = LoadLibrary( (LPCTSTR) "AVRT.dll" );
+  HANDLE taskHande{0};
   if ( AvrtDll ) {
     DWORD taskIndex = 0;
     TAvSetMmThreadCharacteristicsPtr AvSetMmThreadCharacteristicsPtr = ( TAvSetMmThreadCharacteristicsPtr ) GetProcAddress( AvrtDll, "AvSetMmThreadCharacteristicsW" );
-    AvSetMmThreadCharacteristicsPtr( L"Pro Audio", &taskIndex );
-    FreeLibrary( AvrtDll );
+	taskHande = AvSetMmThreadCharacteristicsPtr( L"Pro Audio", &taskIndex );
+    //FreeLibrary( AvrtDll );
   }
 
   // start capture stream if applicable
@@ -4892,7 +4895,8 @@ void RtApiWasapi::wasapiThread()
                                stream_.bufferSize * stream_.nDeviceChannels[OUTPUT] * formatBytes( stream_.deviceFormat[OUTPUT] ) );
   }
 
-  convBuffer = ( char* ) malloc( convBuffSize );
+  convBuffer = ( char* ) malloc( 2*convBuffSize + 1 );
+  convBuffer[convBuffSize] = 0x01;
   stream_.deviceBuffer = ( char* ) malloc( deviceBuffSize );
   if ( !convBuffer || !stream_.deviceBuffer ) {
     errorType = RtAudioError::MEMORY_ERROR;
@@ -4914,7 +4918,7 @@ void RtApiWasapi::wasapiThread()
         callbackPulled = captureBuffer.pullBuffer( convBuffer,
                                                    ( unsigned int ) ( stream_.bufferSize * captureSrRatio ) * stream_.nDeviceChannels[INPUT],
                                                    stream_.deviceFormat[INPUT] );
-
+		//assert(convBuffer[convBuffSize] == 0x01);
         if ( callbackPulled ) {
           // Convert callback buffer to user sample rate
           convertBufferWasapi( stream_.deviceBuffer,
@@ -4925,6 +4929,8 @@ void RtApiWasapi::wasapiThread()
                                ( unsigned int ) ( stream_.bufferSize * captureSrRatio ),
                                convBufferSize,
                                stream_.deviceFormat[INPUT] );
+		  //assert(convBuffer[convBuffSize] == 0x01);
+
 
           if ( stream_.doConvertBuffer[INPUT] ) {
             // Convert callback buffer to user format
@@ -5020,11 +5026,14 @@ void RtApiWasapi::wasapiThread()
                            stream_.bufferSize,
                            convBufferSize,
                            stream_.deviceFormat[OUTPUT] );
+	  //assert(convBuffer[convBuffSize] == 0x01);
 
       // Push callback buffer into outputBuffer
       callbackPushed = renderBuffer.pushBuffer( convBuffer,
                                                 convBufferSize * stream_.nDeviceChannels[OUTPUT],
                                                 stream_.deviceFormat[OUTPUT] );
+	  //assert(convBuffer[convBuffSize] == 0x01);
+
     }
     else {
       // if there is no render stream, set callbackPushed flag
@@ -5165,9 +5174,18 @@ void RtApiWasapi::wasapiThread()
   }
 
 Exit:
+  if (AvrtDll) {
+	  DWORD taskIndex = 0;
+	  TAvRevertMmThreadCharacteristicsPtr AvRevertMmThreadCharacteristicsPtrPtr = (TAvRevertMmThreadCharacteristicsPtr)GetProcAddress(AvrtDll, "AvRevertMmThreadCharacteristics");
+	  AvRevertMmThreadCharacteristicsPtrPtr(taskHande);
+	  
+	  FreeLibrary( AvrtDll );
+  }
   // clean up
   CoTaskMemFree( captureFormat );
   CoTaskMemFree( renderFormat );
+  
+  //assert(convBuffer[convBuffSize] == 0x01);
 
   free ( convBuffer );
 
